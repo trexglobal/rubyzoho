@@ -343,4 +343,32 @@ describe RubyZoho::Crm do
     bad_names.map { |f| RubyZoho::Crm.method_name?(ApiUtils.string_to_symbol(f)).should eq(false) }
   end
 
+  it 'should save multiple lead records' do
+
+    lead1 = RubyZoho::Crm::Lead.new(
+      :first_name => 'Raj',
+      :last_name => 'Portra',
+      :email => 'raj@portra.com'
+    )
+
+
+    lead2 = RubyZoho::Crm::Lead.new(
+      :first_name => 'Mario',
+      :last_name => 'Vejlupek',
+      :email => 'mario@vejlupek.cz'
+    )
+    
+    RubyZoho::Crm::Lead.multi_save([lead1, lead2])
+
+    r = RubyZoho::Crm::Lead.find_by_email('raj@portra.com')
+    r.should_not eq(nil)
+    r.first.email.should eq(lead1.email)
+    r.each { |c| RubyZoho::Crm::Lead.delete(c.id) }
+
+    r = RubyZoho::Crm::Lead.find_by_email('mario@vejlupek.cz')
+    r.should_not eq(nil)
+    r.first.email.should eq(lead2.email)
+    r.each { |c| RubyZoho::Crm::Lead.delete(c.id) }
+  end
+
 end

@@ -30,6 +30,47 @@ class RubyZoho::Crm
     end
   end
 
+
+  # 
+  # Save multiple objects using single request
+  # @param objects [Array] List of object to save
+  # 
+  # @return [Hash] Zoho return hash 
+  def self.multi_save(objects)
+
+    request_url = RubyZoho.configuration.api.create_url(self.module_name, 'insertRecords')
+    
+    request_document = REXML::Document.new
+    module_element = request_document.add_element self.module_name
+
+    groupped_by_url = {}
+
+    objects.each_with_index do |object, row_id|
+
+      fields_values_hash = {}
+      object.fields.each { |f| fields_values_hash.merge!({ f => object.send(f) }) }
+      fields_values_hash.delete_if { |k, v| v.nil? }
+
+      row = module_element.add_element 'row', { 'no' => row_id+1 }
+      fields_values_hash.each_pair { |k, v| RubyZoho.configuration.api.add_field(row, ApiUtils.symbol_to_string(k), v) }
+
+    end
+
+    request_result = RubyZoho.configuration.api.class.post(request_url, {
+      :query => {
+        :newFormat => 1,
+        :authtoken => RubyZoho.configuration.api_key,
+        :scope => 'crmapi', :xmlData => request_document
+      },
+      :headers => { 'Content-length' => '0'}
+    })
+
+    RubyZoho.configuration.api.check_for_errors(request_result)
+    x_r = REXML::Document.new(request_result.body).elements.to_a('//recorddetail')
+    
+    return RubyZoho.configuration.api.to_hash(x_r, module_name)[0]
+  end
+
   def method_missing(meth, *args, &block)
     if [:seid=, :semodule=].index(meth)
       run_create_accessor(self.class, meth)
