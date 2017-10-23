@@ -30,6 +30,7 @@ module RubyZoho
     self.configuration.api = init_api(self.configuration.api_key,
                                       self.configuration.crm_modules, self.configuration.cache_fields)
     RubyZoho::Crm.setup_classes()
+    puts "Configured RubyZoho"
   end
 
   def self.init_api(api_key, modules, cache_fields)
