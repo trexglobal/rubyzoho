@@ -21,6 +21,7 @@ module RubyZoho
   end
 
   def self.configure
+    puts "Configuring RubyZoho..."
     self.configuration ||= Configuration.new
     yield(configuration) if block_given?
     self.configuration.crm_modules ||= []
