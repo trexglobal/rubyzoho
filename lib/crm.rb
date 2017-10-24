@@ -109,7 +109,7 @@ class RubyZoho::Crm
     x_r = REXML::Document.new(request_result.body).elements.to_a('//recorddetail')
 
 
-    return RubyZoho.configuration.api.to_hash(x_r, module_name)[0]
+    return RubyZoho.configuration.api.to_hash(x_r, module_name)
   end
 
   def method_missing(meth, *args, &block)
