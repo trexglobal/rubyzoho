@@ -3,6 +3,14 @@ module ZohoApiFieldUtils
   @@module_fields = {}
   @@users = []
 
+  def add_id_field(row, id)
+    r = (REXML::Element.new 'FL')
+    r.attributes['val'] = 'Id'
+    r.add_text("#{id}")
+    row.elements << r
+    row
+  end
+
   def add_field(row, field, value)
     r = (REXML::Element.new 'FL')
     adjust_tag_case(field)

@@ -77,23 +77,17 @@ class RubyZoho::Crm
   #
   # @return [Hash] Zoho return hash
   def self.batch_insert(objects)
-
     request_url = RubyZoho.configuration.api.create_url(self.module_name, 'insertRecords')
 
     request_document = REXML::Document.new
     module_element = request_document.add_element self.module_name
-
-    groupped_by_url = {}
-
     objects.each_with_index do |object, row_id|
-
       fields_values_hash = {}
       object.fields.each { |f| fields_values_hash.merge!({ f => object.send(f) }) }
       fields_values_hash.delete_if { |k, v| v.nil? }
 
       row = module_element.add_element 'row', { 'no' => row_id+1 }
       fields_values_hash.each_pair { |k, v| RubyZoho.configuration.api.add_field(row, ApiUtils.symbol_to_string(k), v) }
-
     end
 
     request_result = RubyZoho.configuration.api.class.post(request_url, {
@@ -107,9 +101,80 @@ class RubyZoho::Crm
     puts("request_result=#{request_result.to_json}")
     RubyZoho.configuration.api.check_for_errors(request_result)
     x_r = REXML::Document.new(request_result.body).elements.to_a('//recorddetail')
-
-
     return RubyZoho.configuration.api.to_hash(x_r, module_name)
+  end
+
+  #
+  # batch update objects using single request
+  # @param objects [Array] List of objects to update. Each object must have :id field value
+  #
+  # @return [Hash] Zoho return hash
+  def self.batch_update(objects, verbose=false)
+    request_url = RubyZoho.configuration.api.create_url(self.module_name, 'updateRecords')
+    request_document = REXML::Document.new
+    module_element = request_document.add_element self.module_name
+    invalid_objects = []
+    objects.each_with_index do |object, row_id|
+      fields_values_hash = {}
+      object.fields.each { |f| fields_values_hash.merge!({ f => object.send(f) })}
+      fields_values_hash.delete_if { |k, v| v.nil? }
+      puts "update_field_values=#{fields_values_hash.to_json}" if verbose
+      id = fields_values_hash[:id]
+      if id
+        puts "id=#{id}" if verbose
+        fields_values_hash.delete(:id)
+        row = module_element.add_element 'row', { 'no' => row_id+1 }
+        RubyZoho.configuration.api.add_id_field(row, id)
+        fields_values_hash.each_pair { |k, v| RubyZoho.configuration.api.add_field(row, ApiUtils.symbol_to_string(k), v) }
+      else
+        invalid_objects << {:error_message => 'id not found',  :error_object =>object}
+      end
+    end
+    unless invalid_objects.empty?
+      return {success: false, error_code: 'INVALID_REQUEST_OBJECT', error_message: "Invalid request object(s)", invalid_objects: invalid_objects}
+    end
+    puts "request_document=#{request_document}" if verbose
+    #return {success: true, request_result: {}}  # keep this for debug
+    # :version=>4 is required to execute in batch mode
+    request_result = RubyZoho.configuration.api.class.post(request_url, {
+      :query => {
+        :version=>4,
+        :authtoken => RubyZoho.configuration.api_key,
+        :scope => 'crmapi', :xmlData => request_document
+      },
+      :headers => { 'Content-length' => '0'}
+    })
+
+    unless request_result.code == 200
+      return {success: false, error_code: 'WEB_SERVICE_CALL_FAILED', error_message: "Web service call failed with #{request_result.code}", request_result:request_result}
+    end
+    puts "ws_request_result=#{request_result}" if verbose
+    request_result_by_row = build_batch_update_request_result(objects, request_result)
+    return {success:true, request_result: request_result_by_row}
+  end
+
+  def self.build_batch_update_request_result(objects, request_result)
+    result_by_row = {}
+    REXML::Document.new(request_result.body).elements.to_a('//response/result/row').each do |row|
+      row_no = row.attribute('no').value
+      row_result = row.elements.first
+      status = row_result.name
+      code = row_result.elements['code'].text
+      if status == 'error'
+        details =row_result.elements['details'].text
+      else
+        details = ''
+      end
+      result_by_row[row_no] = {row: row_no, status: status, code: code, details: details}
+    end
+    puts "result_by_row=#{result_by_row}"
+    row = 0
+    request_result_by_id = {}
+    objects.each do |object|
+      row += 1
+      request_result_by_id[object.id] = result_by_row[row.to_s]
+    end
+    return request_result_by_id
   end
 
   def method_missing(meth, *args, &block)
