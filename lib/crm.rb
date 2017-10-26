@@ -75,46 +75,58 @@ class RubyZoho::Crm
   # batch insert objects using single request
   # @param objects [Array] List of object to save
   #
-  # @return [Hash] Zoho return hash
-  def self.batch_insert(objects)
+  # @return [Hash] status
+  def self.batch_insert(objects, wfTrigger=false, verbose=false)
     request_url = RubyZoho.configuration.api.create_url(self.module_name, 'insertRecords')
 
     request_document = REXML::Document.new
     module_element = request_document.add_element self.module_name
-    objects.each_with_index do |object, row_id|
+    objects.each_with_index do |object, index|
       fields_values_hash = {}
       object.fields.each { |f| fields_values_hash.merge!({ f => object.send(f) }) }
       fields_values_hash.delete_if { |k, v| v.nil? }
 
-      row = module_element.add_element 'row', { 'no' => row_id+1 }
+      row = module_element.add_element('row', { 'no' => index+1 })
       fields_values_hash.each_pair { |k, v| RubyZoho.configuration.api.add_field(row, ApiUtils.symbol_to_string(k), v) }
+      puts "insert_field_values=#{fields_values_hash.to_json}" if verbose
     end
 
+    puts "request_document=#{request_document}" if verbose
     request_result = RubyZoho.configuration.api.class.post(request_url, {
       :query => {
-        :newFormat => 1,
+        :wfTrigger=>wfTrigger,
+        :newFormat=>1,
+        :version=>4,
         :authtoken => RubyZoho.configuration.api_key,
         :scope => 'crmapi', :xmlData => request_document
       },
       :headers => { 'Content-length' => '0'}
     })
-    puts("request_result=#{request_result.to_json}")
-    RubyZoho.configuration.api.check_for_errors(request_result)
-    x_r = REXML::Document.new(request_result.body).elements.to_a('//recorddetail')
-    return RubyZoho.configuration.api.to_hash(x_r, module_name)
+    unless request_result.code == 200
+      return {success: false, error_code: 'WEB_SERVICE_CALL_FAILED', error_message: "Web service call failed with #{request_result.code}", request_result:request_result}
+    end
+    puts "ws_request_result=#{request_result}" if verbose
+    begin
+      request_result_by_row = build_batch_request_result(objects, request_result, verbose)
+      return {success:true, request_result: request_result_by_row}
+    rescue => e
+      puts e.inspect
+      puts e.backtrace.join("\n")
+      return {success: false, error_code: 'INVALID_REQUEST_RESULT', error_message: "Web service call returned invalid/malformed request result", request_result:request_result}
+    end
   end
 
   #
   # batch update objects using single request
   # @param objects [Array] List of objects to update. Each object must have :id field value
   #
-  # @return [Hash] Zoho return hash
-  def self.batch_update(objects, verbose=false)
+  # @return [Hash] status
+  def self.batch_update(objects, wfTrigger=false, verbose=false)
     request_url = RubyZoho.configuration.api.create_url(self.module_name, 'updateRecords')
     request_document = REXML::Document.new
     module_element = request_document.add_element self.module_name
     invalid_objects = []
-    objects.each_with_index do |object, row_id|
+    objects.each_with_index do |object, index|
       fields_values_hash = {}
       object.fields.each { |f| fields_values_hash.merge!({ f => object.send(f) })}
       fields_values_hash.delete_if { |k, v| v.nil? }
@@ -123,7 +135,7 @@ class RubyZoho::Crm
       if id
         puts "id=#{id}" if verbose
         fields_values_hash.delete(:id)
-        row = module_element.add_element 'row', { 'no' => row_id+1 }
+        row = module_element.add_element 'row', { 'no' => index+1 }
         RubyZoho.configuration.api.add_id_field(row, id)
         fields_values_hash.each_pair { |k, v| RubyZoho.configuration.api.add_field(row, ApiUtils.symbol_to_string(k), v) }
       else
@@ -138,6 +150,7 @@ class RubyZoho::Crm
     # :version=>4 is required to execute in batch mode
     request_result = RubyZoho.configuration.api.class.post(request_url, {
       :query => {
+        :wfTrigger=>wfTrigger,
         :version=>4,
         :authtoken => RubyZoho.configuration.api_key,
         :scope => 'crmapi', :xmlData => request_document
@@ -149,32 +162,65 @@ class RubyZoho::Crm
       return {success: false, error_code: 'WEB_SERVICE_CALL_FAILED', error_message: "Web service call failed with #{request_result.code}", request_result:request_result}
     end
     puts "ws_request_result=#{request_result}" if verbose
-    request_result_by_row = build_batch_update_request_result(objects, request_result)
-    return {success:true, request_result: request_result_by_row}
+    begin
+      request_result_by_row = build_batch_request_result(objects, request_result, verbose)
+      return {success:true, request_result: request_result_by_row}
+    rescue => e
+      puts e.inspect
+      puts e.backtrace.join("\n")
+      return {success: false, error_code: 'INVALID_REQUEST_RESULT', error_message: "Web service call returned invalid/malformed request result", request_result:request_result}
+    end
   end
 
-  def self.build_batch_update_request_result(objects, request_result)
+  def self.build_batch_request_result(objects, request_result, verbose=false)
     result_by_row = {}
     REXML::Document.new(request_result.body).elements.to_a('//response/result/row').each do |row|
       row_no = row.attribute('no').value
-      row_result = row.elements.first
-      status = row_result.name
-      code = row_result.elements['code'].text
-      if status == 'error'
-        details =row_result.elements['details'].text
-      else
-        details = ''
+      row_result = row.elements.first #only one element expected either 'success' or 'error'
+      unless row_result
+        result_by_row[row_no] = {row: row_no, success: false, message: 'Malformed request result', id: nil}
+        next
       end
-      result_by_row[row_no] = {row: row_no, status: status, code: code, details: details}
+
+      code = safe_xml_element_text_value(row_result.elements['code'])
+      status = row_result.name
+      if status == 'success'
+        id = safe_xml_element_text_value(row_result.elements["details/FL[@val='Id']"])
+        if id
+          success = true
+          message = ''
+        else
+          success = false
+          message = 'Request processed successfully, but Id not found in request result'
+        end
+      elsif status =='error'
+        id = nil
+        success = false
+        message = safe_xml_element_text_value(row_result.elements['details'])
+      else
+        id = nil
+        success = false
+        message = 'Unknown request result status'
+      end
+      result_by_row[row_no] = {row: row_no, success: success, code: code, message: message, id: id}
     end
-    puts "result_by_row=#{result_by_row}"
-    row = 0
-    request_result_by_id = {}
-    objects.each do |object|
-      row += 1
-      request_result_by_id[object.id] = result_by_row[row.to_s]
+    objects.each_with_index do |object, index|
+      row_no = index + 1
+      result = result_by_row[row_no.to_s]
+      unless result
+        message = "No request result found for #{row_no}"
+        puts message if verbose
+        result = result_by_row[row_no.to_s] = {row: row_no, success: false, code: nil, message: message, id: nil}
+      end
+      result[:source_object] = object
     end
-    return request_result_by_id
+    puts "result_by_row=#{result_by_row}" if verbose
+    return result_by_row
+  end
+
+  def self.safe_xml_element_text_value(element)
+    return nil unless element
+    return element.text
   end
 
   def method_missing(meth, *args, &block)
