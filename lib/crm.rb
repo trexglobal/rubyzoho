@@ -95,6 +95,7 @@ class RubyZoho::Crm
     request_result = RubyZoho.configuration.api.class.post(request_url, {
       :query => {
         :wfTrigger=>wfTrigger,
+        :duplicateCheck=>'1',
         :newFormat=>1,
         :version=>4,
         :authtoken => RubyZoho.configuration.api_key,
@@ -152,6 +153,7 @@ class RubyZoho::Crm
       :query => {
         :wfTrigger=>wfTrigger,
         :newFormat=>1,
+        :duplicateCheck=>'1',
         :version=>4,
         :authtoken => RubyZoho.configuration.api_key,
         :scope => 'crmapi', :xmlData => request_document
