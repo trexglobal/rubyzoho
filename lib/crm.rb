@@ -31,6 +31,8 @@ class RubyZoho::Crm
   end
 
 
+
+
   # 
   # Save multiple objects using single request
   # @param objects [Array] List of object to save
@@ -168,6 +170,86 @@ class RubyZoho::Crm
     begin
       request_result_by_row = build_batch_request_result(objects, request_result, verbose)
       return {success:true, request_result: request_result_by_row}
+    rescue => e
+      puts e.inspect
+      puts e.backtrace.join("\n")
+      return {success: false, error_code: 'INVALID_REQUEST_RESULT', error_message: "Web service call returned invalid/malformed request result", request_result:request_result}
+    end
+  end
+
+  #
+  # convertLead API wrapper
+  # @param LeadID   #
+  # @return [Hash] status
+  def self.convert_lead(lead_id, potential_name, potential_stage, closing_date, verbose=false)
+    #validate
+
+    if lead_id.blank?
+      return {success: false, error_code: 'INVALID_LEAD_ID', error_message: 'Invalid Lead ID'}
+    end
+
+    if potential_name.blank?
+      return {success: false, error_code: 'INVALID_POTENTIAL_NAME', error_message: 'Invalid Potential Name'}
+    end
+
+    if potential_stage.blank?
+      return {success: false, error_code: 'INVALID_POTENTIAL_STAGE', error_message: 'Invalid Potential Stage'}
+    end
+
+    if closing_date.blank?
+      return {success: false, error_code: 'INVALID_CLOSING_DATE', error_message: 'Invalid Closing Date'}
+    end
+
+    zoho_closing_date = closing_date.strftime("%m/%d/%Y")
+
+    request_url = RubyZoho.configuration.api.create_url('Leads', 'convertLead')
+    request_document = REXML::Document.new
+    module_element = request_document.add_element 'Potentials'
+
+    row1 = module_element.add_element 'row', { 'no' => 1 }
+    RubyZoho.configuration.api.add_option_field(row1, 'createPotential', true)
+    RubyZoho.configuration.api.add_option_field(row1, 'notifyLeadOwner', false)
+    RubyZoho.configuration.api.add_option_field(row1, 'notifyNewEntityOwner', false)
+
+    row2 = module_element.add_element 'row', { 'no' => 2 }
+    RubyZoho.configuration.api.add_option_field(row2, 'Closing Date', zoho_closing_date)
+    RubyZoho.configuration.api.add_option_field(row2, 'Potential Stage', potential_stage)
+    RubyZoho.configuration.api.add_option_field(row2, 'Potential Name', potential_name)
+
+    puts "request_document=#{request_document}" if verbose
+    #return {success: true, request_result: {}}  # keep this for debug
+    # :version=>4 is required to execute in batch mode
+    request_result = RubyZoho.configuration.api.class.post(request_url, {
+      :query => {
+        :leadId => lead_id,
+        :newFormat=>1,
+        :version=>1,
+        :authtoken => RubyZoho.configuration.api_key,
+        :scope => 'crmapi', :xmlData => request_document
+      },
+      :headers => { 'Content-length' => '0'}
+    })
+
+    unless request_result.code == 200
+      return {success: false, error_code: 'WEB_SERVICE_CALL_FAILED', error_message: "Web service call failed with #{request_result.code}", request_result:request_result}
+    end
+    puts "ws_request_result=#{request_result}" if verbose
+    begin
+      doc = REXML::Document.new(request_result.body)
+      successTag =doc.elements['//success']
+      if successTag
+        account_id = safe_xml_element_text_value(successTag.elements["//Account"])
+        contact_id = safe_xml_element_text_value(successTag.elements["//Contact"])
+        potential_id = safe_xml_element_text_value(successTag.elements["//Potential"])
+        return {success: true, account_id: account_id, contact_id: contact_id, potential_id: potential_id}
+      end
+      errorTag = doc.elements['//response//error']
+      if errorTag
+        error_code = safe_xml_element_text_value(errorTag.elements["//code"])
+        error_message = safe_xml_element_text_value(errorTag.elements["//message"])
+        return {success: false, error_code: error_code, error_message: error_message}
+      end
+      return {success: false, error_code: 'INVALID_REQUEST_RESULT', error_message: "Web service call returned invalid/malformed request result", request_result:request_result}
     rescue => e
       puts e.inspect
       puts e.backtrace.join("\n")

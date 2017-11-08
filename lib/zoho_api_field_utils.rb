@@ -11,6 +11,14 @@ module ZohoApiFieldUtils
     row
   end
 
+  def add_option_field(row, field, value)
+    r = (REXML::Element.new 'FL')
+    r.attributes['val'] = field
+    r.add_text("#{value}")
+    row.elements << r
+    row
+  end
+
   def add_field(row, field, value)
     r = (REXML::Element.new 'FL')
     adjust_tag_case(field)
